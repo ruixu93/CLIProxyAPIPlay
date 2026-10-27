@@ -196,6 +196,7 @@ waitForCallback:
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresIn:    tokenResp.ExpiresIn,
 		TokenType:    tokenResp.TokenType,
+		IDToken:      tokenResp.IDToken,
 	}, email, projectID), nil
 }
 
@@ -254,11 +255,13 @@ func FetchAntigravityProjectID(ctx context.Context, accessToken string, httpClie
 const AntigravityDefaultCallbackPort = antigravity.CallbackPort
 
 // AntigravityTokenResponse captures the tokens returned by Antigravity OAuth exchange.
+// IDToken is parsed for openid responses but is intentionally not persisted in auth metadata.
 type AntigravityTokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int64  `json:"expires_in"`
 	TokenType    string `json:"token_type"`
+	IDToken      string `json:"id_token"`
 }
 
 // AntigravityDefaultCallbackURI returns the default loopback redirect URI for Antigravity OAuth.
@@ -308,6 +311,7 @@ func ExchangeAntigravityCode(ctx context.Context, code, redirectURI string, http
 		RefreshToken: tokenResp.RefreshToken,
 		ExpiresIn:    tokenResp.ExpiresIn,
 		TokenType:    tokenResp.TokenType,
+		IDToken:      tokenResp.IDToken,
 	}, nil
 }
 

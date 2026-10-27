@@ -50,8 +50,21 @@ func TestAntigravityConstantsAndURLBuilder(t *testing.T) {
 	if q.Get("prompt") != "consent" {
 		t.Fatalf("expected prompt=consent, got %q", q.Get("prompt"))
 	}
-	if !strings.Contains(q.Get("scope"), "cloud-platform") {
-		t.Fatalf("scope should include cloud-platform: %s", q.Get("scope"))
+	if q.Get("include_granted_scopes") != "true" {
+		t.Fatalf("expected include_granted_scopes=true, got %q", q.Get("include_granted_scopes"))
+	}
+	scopes := q.Get("scope")
+	if !strings.Contains(scopes, "cloud-platform") {
+		t.Fatalf("scope should include cloud-platform: %s", scopes)
+	}
+	if !strings.Contains(scopes, "openid") {
+		t.Fatalf("scope should include openid: %s", scopes)
+	}
+	if strings.Contains(scopes, "auth/aicode") {
+		t.Fatalf("scope should not include aicode: %s", scopes)
+	}
+	if q.Has("code_challenge") || q.Has("code_challenge_method") {
+		t.Fatalf("antigravity auth URL must not use PKCE: %s", parsed.RawQuery)
 	}
 
 	// Test with empty redirect URI (should fallback to default)
@@ -86,7 +99,10 @@ func TestExchangeAntigravityCode(t *testing.T) {
 			if !strings.Contains(bodyStr, "grant_type=authorization_code") {
 				t.Fatalf("request body missing grant_type: %s", bodyStr)
 			}
-			respJSON := `{"access_token":"mock-access-token","refresh_token":"mock-refresh-token","expires_in":3600,"token_type":"Bearer"}`
+			if strings.Contains(bodyStr, "code_verifier") {
+				t.Fatalf("antigravity token exchange must not use PKCE: %s", bodyStr)
+			}
+			respJSON := `{"access_token":"mock-access-token","refresh_token":"mock-refresh-token","expires_in":3600,"token_type":"Bearer","id_token":"mock-id-token"}`
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     make(http.Header),
@@ -107,6 +123,9 @@ func TestExchangeAntigravityCode(t *testing.T) {
 	}
 	if tokenResp.ExpiresIn != 3600 {
 		t.Fatalf("ExpiresIn = %d, want 3600", tokenResp.ExpiresIn)
+	}
+	if tokenResp.IDToken != "mock-id-token" {
+		t.Fatalf("IDToken = %q, want mock-id-token", tokenResp.IDToken)
 	}
 }
 
@@ -170,6 +189,9 @@ func TestBuildAntigravityAuth(t *testing.T) {
 	}
 	if meta["refresh_token"] != "mock-refresh-token" {
 		t.Fatalf("Metadata[refresh_token] = %v", meta["refresh_token"])
+	}
+	if _, ok := meta["id_token"]; ok {
+		t.Fatalf("Metadata[id_token] must not be persisted: %v", meta["id_token"])
 	}
 	if meta["email"] != "engineer@example.com" {
 		t.Fatalf("Metadata[email] = %v", meta["email"])

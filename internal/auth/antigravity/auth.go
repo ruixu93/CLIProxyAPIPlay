@@ -17,12 +17,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// TokenResponse represents OAuth token response from Google
+// TokenResponse represents OAuth token response from Google.
+// IDToken is parsed for openid responses but is intentionally never persisted or logged.
 type TokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int64  `json:"expires_in"`
 	TokenType    string `json:"token_type"`
+	IDToken      string `json:"id_token"`
 }
 
 // userInfo represents Google user profile
@@ -146,6 +148,7 @@ func (o *AntigravityAuth) BuildAuthURL(state, redirectURI string) string {
 	params := url.Values{}
 	params.Set("access_type", "offline")
 	params.Set("client_id", ClientID)
+	params.Set("include_granted_scopes", "true")
 	params.Set("prompt", "consent")
 	params.Set("redirect_uri", redirectURI)
 	params.Set("response_type", "code")

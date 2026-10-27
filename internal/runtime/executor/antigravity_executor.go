@@ -475,6 +475,20 @@ func newAntigravityHTTPClient(ctx context.Context, cfg *config.Config, auth *cli
 	return client
 }
 
+// newAntigravityOAuthHTTPClient creates the client used for OAuth token refresh.
+// Unlike CloudCode requests, Google's OAuth token endpoint is reached over HTTP/2
+// with h2 ALPN, so this path must not reuse the HTTP/1.1-only Antigravity pool.
+func newAntigravityOAuthHTTPClient(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth) (clientOut *http.Client) {
+	defer func() { clientOut = httptransport.Decorate(ctx, clientOut) }()
+	client := helps.NewProxyAwareHTTPClient(httptransport.WithoutDecorator(ctx), cfg, auth, 0)
+	if client.Transport == nil {
+		// The process default transport advertises h2 and is also the test seam
+		// used by refresh tests to redirect oauth2.googleapis.com.
+		client.Transport = antigravityBaseTransport
+	}
+	return client
+}
+
 func antigravityProxyURL(ctx context.Context, cfg *config.Config, auth *cliproxyauth.Auth) string {
 	if proxyURL := cliproxyexecutor.RequestProxyURL(ctx); proxyURL != "" {
 		return proxyURL

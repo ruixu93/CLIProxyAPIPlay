@@ -207,6 +207,62 @@ func TestAntigravityRefresh_DeduplicatesConcurrentRefresh(t *testing.T) {
 	}
 }
 
+func TestAntigravityOAuthRefreshUsesHTTP2(t *testing.T) {
+	resetAntigravityRefreshGroupForTest()
+	t.Cleanup(resetAntigravityRefreshGroupForTest)
+
+	var sawHTTP2 atomic.Bool
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/token" {
+			http.NotFound(w, r)
+			return
+		}
+		sawHTTP2.Store(r.ProtoMajor == 2)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"access_token":"new-access",
+			"refresh_token":"new-refresh",
+			"token_type":"Bearer",
+			"expires_in":3600
+		}`)
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, server.Listener.Addr().String())
+		},
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // test-only self-signed server
+		ForceAttemptHTTP2: true,
+	}
+	originalBase := antigravityBaseTransport
+	antigravityBaseTransport = transport
+	antigravityTransports.Purge()
+	t.Cleanup(func() {
+		antigravityBaseTransport = originalBase
+		antigravityTransports.Purge()
+	})
+
+	// No auth ID keeps the optional credits refresh from issuing a second request.
+	auth := &cliproxyauth.Auth{Metadata: map[string]any{
+		"refresh_token": "refresh-token",
+		"project_id":    "project-a",
+	}}
+
+	updated, errRefresh := (&AntigravityExecutor{}).Refresh(context.Background(), auth)
+	if errRefresh != nil {
+		t.Fatalf("Refresh() error = %v", errRefresh)
+	}
+	if updated == nil || metaStringValue(updated.Metadata, "access_token") != "new-access" {
+		t.Fatalf("updated auth = %#v, want new-access token", updated)
+	}
+	if !sawHTTP2.Load() {
+		t.Fatal("OAuth token refresh did not use HTTP/2")
+	}
+}
+
 func waitForAntigravityCreditsRefresh(t *testing.T, state *antigravityCreditsHintRefreshState) {
 	t.Helper()
 	state.mu.Lock()

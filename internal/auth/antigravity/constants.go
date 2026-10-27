@@ -15,6 +15,7 @@ var Scopes = []string{
 	"https://www.googleapis.com/auth/userinfo.profile",
 	"https://www.googleapis.com/auth/cclog",
 	"https://www.googleapis.com/auth/experimentsandconfigs",
+	"openid",
 }
 
 // OAuth2 endpoints for Google authentication
