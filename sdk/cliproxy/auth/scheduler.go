@@ -421,7 +421,7 @@ func (s *authScheduler) pickSingleWithStrategy(ctx context.Context, provider, mo
 	if shard == nil {
 		return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
 	}
-	predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin)
+	predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin, modelKey)
 	if picked := shard.pickReadyLocked(preferWebsocket, strategy, predicate); picked != nil {
 		return picked, nil
 	}
@@ -482,14 +482,14 @@ func (s *authScheduler) pickMixedWithStrategy(ctx context.Context, providers []s
 			return nil, "", &Error{Code: "auth_not_found", Message: "no auth available"}
 		}
 		shard := providerState.ensureModelLocked(modelKey, time.Now())
-		predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin)
+		predicate := scheduledAuthPredicate(eligibility, tried, pinnedAuthID, strategy == schedulerStrategyWeightedRoundRobin, modelKey)
 		if picked := shard.pickReadyLocked(false, strategy, predicate); picked != nil {
 			return picked, providerKey, nil
 		}
 		return nil, "", shard.unavailableErrorLocked("mixed", model, predicate)
 	}
 
-	predicate := scheduledAuthPredicate(eligibility, tried, "", strategy == schedulerStrategyWeightedRoundRobin)
+	predicate := scheduledAuthPredicate(eligibility, tried, "", strategy == schedulerStrategyWeightedRoundRobin, modelKey)
 	candidateShards := make([]*modelScheduler, len(normalized))
 	bestPriority := 0
 	hasCandidate := false
@@ -705,7 +705,7 @@ func (s *authScheduler) mixedUnavailableErrorLocked(providers []string, model st
 }
 
 // scheduledAuthPredicate filters request-ineligible auths before scheduler state advances.
-func scheduledAuthPredicate(eligibility authSelectionEligibility, tried map[string]struct{}, pinnedAuthID string, requirePositiveWeight bool) func(*scheduledAuth) bool {
+func scheduledAuthPredicate(eligibility authSelectionEligibility, tried map[string]struct{}, pinnedAuthID string, requirePositiveWeight bool, model string) func(*scheduledAuth) bool {
 	return func(entry *scheduledAuth) bool {
 		if entry == nil || entry.auth == nil || !eligibility.allows(entry.auth) {
 			return false
@@ -720,6 +720,9 @@ func scheduledAuthPredicate(eligibility authSelectionEligibility, tried map[stri
 			if _, ok := tried[entry.auth.ID]; ok {
 				return false
 			}
+		}
+		if pinnedAuthID == "" && !AntigravityQuotaAllowsModel(entry.auth, model, time.Now()) {
+			return false
 		}
 		return true
 	}

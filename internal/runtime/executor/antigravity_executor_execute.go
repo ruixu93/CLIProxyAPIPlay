@@ -160,6 +160,7 @@ func (e *AntigravityExecutor) Execute(ctx context.Context, auth *cliproxyauth.Au
 	helps.AppendAPIResponseChunk(ctx, e.cfg, bodyBytes)
 
 	if httpResp.StatusCode == http.StatusTooManyRequests {
+		e.maybeRefreshAntigravityQuotaHint(ctx, auth, token, true)
 		decision := decideAntigravity429(bodyBytes)
 		switch decision.kind {
 		case antigravity429DecisionShortCooldownSwitchAuth:
@@ -384,6 +385,7 @@ func (e *AntigravityExecutor) executeClaudeNonStream(ctx context.Context, auth *
 		}
 		helps.AppendAPIResponseChunk(ctx, e.cfg, bodyBytes)
 		if httpResp.StatusCode == http.StatusTooManyRequests {
+			e.maybeRefreshAntigravityQuotaHint(ctx, auth, token, true)
 			decision := decideAntigravity429(bodyBytes)
 
 			switch decision.kind {

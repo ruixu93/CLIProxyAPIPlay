@@ -167,6 +167,7 @@ func (e *AntigravityExecutor) ExecuteStream(ctx context.Context, auth *cliproxya
 		}
 		helps.AppendAPIResponseChunk(ctx, e.cfg, bodyBytes)
 		if httpResp.StatusCode == http.StatusTooManyRequests {
+			e.maybeRefreshAntigravityQuotaHint(ctx, auth, token, true)
 			decision := decideAntigravity429(bodyBytes)
 
 			switch decision.kind {

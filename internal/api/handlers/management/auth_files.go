@@ -683,6 +683,12 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth, quota authFileQu
 	entry["failed"] = auth.Failed
 	entry["recent_requests"] = auth.RecentRequestsSnapshot(time.Now())
 	entry["quota"] = quotaObservationPayloadForProvider(auth.Provider, auth.Quota)
+	if strings.EqualFold(strings.TrimSpace(auth.Provider), "antigravity") {
+		if hint, ok := coreauth.GetAntigravityQuotaHint(auth.ID); ok && hint.Known {
+			entry["antigravity_quota"] = hint
+			entry["supports_quota"] = true
+		}
+	}
 	if modelQuotas := modelQuotaObservationPayload(auth.Provider, auth.ModelStates); len(modelQuotas) > 0 {
 		entry["model_quotas"] = modelQuotas
 	}
