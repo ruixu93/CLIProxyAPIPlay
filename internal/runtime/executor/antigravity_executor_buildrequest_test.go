@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +53,59 @@ func TestAntigravityLoadCodeAssistBaseURL(t *testing.T) {
 				t.Fatalf("loadCodeAssist base URL = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAntigravityPerAccountUserAgent(t *testing.T) {
+	macAuth := &cliproxyauth.Auth{Metadata: map[string]any{"ua_platform": "macos"}}
+	if got := resolveUserAgent(macAuth); !strings.Contains(got, "os_type=darwin; arch=arm64") {
+		t.Fatalf("macOS UA = %q", got)
+	}
+	if got := resolveLoadCodeAssistUserAgent(macAuth); !strings.Contains(got, "os_type=darwin; arch=arm64") {
+		t.Fatalf("macOS loadCodeAssist UA = %q", got)
+	}
+
+	linuxAuth := &cliproxyauth.Auth{Attributes: map[string]string{"ua_platform": "linux"}}
+	if got := resolveUserAgent(linuxAuth); !strings.Contains(got, "os_type=linux; arch=amd64") {
+		t.Fatalf("Linux UA = %q", got)
+	}
+
+	const explicit = "antigravity/hub/2.24.0 (aidev_client; os_type=darwin; arch=arm64; cl=1000335682)"
+	explicitAuth := &cliproxyauth.Auth{
+		Attributes: map[string]string{"ua_platform": "linux"},
+		Metadata:   map[string]any{"user_agent": explicit},
+	}
+	if got := resolveUserAgent(explicitAuth); got != explicit {
+		t.Fatalf("explicit UA = %q, want %q", got, explicit)
+	}
+}
+
+func TestAntigravityBuildRequestUsesChunkedFraming(t *testing.T) {
+	var sawChunked atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawChunked.Store(r.ContentLength < 0 && slices.Contains(r.TransferEncoding, "chunked"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	executor := &AntigravityExecutor{}
+	auth := &cliproxyauth.Auth{Metadata: map[string]any{"project_id": "project-1"}}
+	req, err := executor.buildRequest(context.Background(), auth, "token", "gemini-3.1-pro", []byte(`{"request":{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}}`), false, "", server.URL)
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+	if req.ContentLength != 0 || req.GetBody != nil {
+		t.Fatalf("request body framing = (%d, %v), want unknown length with chunked encoding", req.ContentLength, req.GetBody != nil)
+	}
+	resp, errDo := http.DefaultClient.Do(req)
+	if errDo != nil {
+		t.Fatalf("send request: %v", errDo)
+	}
+	if errClose := resp.Body.Close(); errClose != nil {
+		t.Fatalf("close response body: %v", errClose)
+	}
+	if !sawChunked.Load() {
+		t.Fatal("inference request did not use Transfer-Encoding: chunked")
 	}
 }
 

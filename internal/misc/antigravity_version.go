@@ -20,8 +20,8 @@ const (
 	// manifest has not been fetched yet or cannot be reached. Cloud Code rejects
 	// newer models for clients below 2.23.0, so this floor must stay at or above
 	// that version.
-	antigravityFallbackVersion = "2.24.0"
-	antigravityHubPlatform     = "os_type=darwin; arch=arm64"
+	antigravityFallbackVersion = "2.26.0"
+	antigravityHubPlatform     = "os_type=linux; arch=amd64"
 	antigravityVersionCacheTTL = 6 * time.Hour
 	antigravityFetchTimeout    = 10 * time.Second
 	AntigravityNodeAPIClientUA = "google-api-nodejs-client/10.3.0"
@@ -33,12 +33,13 @@ var (
 )
 
 // Changelists belong to specific Hub releases, not to the latest manifest in
-// general. Update the fallback release and its entry together. The 2.24.0 value
-// was verified in the official darwin-arm archive's webm_encoder build metadata.
+// general. Update the fallback release and its entry together. The 2.26.0 value
+// was observed in the official Linux Hub 2.26.0 User-Agent.
 // Unknown releases keep their online version without claiming another build's CL.
 var antigravityHubChangelists = map[string]string{
 	"2.23.0": "998057262",
 	"2.24.0": "1000335682",
+	"2.26.0": "1005016104",
 }
 
 type antigravityHubUpdaterManifest struct {
@@ -123,8 +124,42 @@ func AntigravityLatestVersion() string {
 
 // AntigravityUserAgent returns the User-Agent string used by the Antigravity Hub family.
 func AntigravityUserAgent() string {
+	return antigravityUserAgentWithPlatform(antigravityHubPlatform)
+}
+
+// AntigravityUserAgentForPlatform returns the Hub User-Agent for a named
+// platform. Supported values are linux, macos/mac/darwin, and windows/win.
+// Unknown values fall back to the process default.
+func AntigravityUserAgentForPlatform(platform string) string {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	switch {
+	case strings.HasPrefix(platform, "linux"):
+		return antigravityUserAgentWithPlatform("os_type=linux; arch=amd64")
+	case strings.HasPrefix(platform, "mac"), strings.HasPrefix(platform, "darwin"), strings.HasPrefix(platform, "osx"):
+		return antigravityUserAgentWithPlatform("os_type=darwin; arch=arm64")
+	case strings.HasPrefix(platform, "windows"), strings.HasPrefix(platform, "win"):
+		return antigravityUserAgentWithPlatform("os_type=windows; arch=amd64")
+	default:
+		return AntigravityUserAgent()
+	}
+}
+
+// AntigravityRequestUserAgentForAccount resolves the per-account UA override.
+// An explicit User-Agent wins; otherwise a platform shorthand builds the
+// version-matched Hub UA; otherwise the process default is used.
+func AntigravityRequestUserAgentForAccount(userAgent, platform string) string {
+	if trimmed := strings.TrimSpace(userAgent); trimmed != "" {
+		return AntigravityRequestUserAgent(trimmed)
+	}
+	if trimmed := strings.TrimSpace(platform); trimmed != "" {
+		return AntigravityUserAgentForPlatform(trimmed)
+	}
+	return AntigravityUserAgent()
+}
+
+func antigravityUserAgentWithPlatform(platform string) string {
 	version := AntigravityLatestVersion()
-	metadata := "aidev_client; " + antigravityHubPlatform
+	metadata := "aidev_client; " + platform
 	if changelist := antigravityHubChangelists[version]; changelist != "" {
 		metadata += "; cl=" + changelist
 	}

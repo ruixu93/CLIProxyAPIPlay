@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -109,7 +110,17 @@ func (s *Service) antigravityCapabilityKey(auth *coreauth.Auth) string {
 	if auth == nil {
 		return ""
 	}
-	return antigravityCapabilityKeyForRoute(auth, antigravityModelBaseURLs(auth)[0], s.antigravityModelFetchProxyURL(auth), antigravityModelUserAgent())
+	return antigravityCapabilityKeyForRoute(auth, antigravityModelBaseURLs(auth)[0], s.antigravityModelFetchProxyURL(auth), antigravityModelUserAgentForAuth(auth))
+}
+
+// antigravityModelUserAgentForAuth applies the same per-account UA override
+// used by inference so model discovery cannot mix platform identities.
+func antigravityModelUserAgentForAuth(auth *coreauth.Auth) string {
+	raw, platform := coreauth.AntigravityUserAgentOverride(auth)
+	if raw == "" && platform == "" {
+		return antigravityModelUserAgent()
+	}
+	return misc.AntigravityRequestUserAgentForAccount(raw, platform)
 }
 
 func antigravityCapabilityKeyForRoute(auth *coreauth.Auth, endpoint, proxy, userAgent string) string {
@@ -127,7 +138,7 @@ func (s *Service) cachedAntigravityHints(auth *coreauth.Auth) antigravityModelCa
 		return antigravityModelCapabilityHints{}
 	}
 	endpoint := antigravityModelBaseURLs(auth)[0]
-	key := antigravityCapabilityKeyForRoute(auth, endpoint, s.antigravityModelFetchProxyURL(auth), antigravityModelUserAgent())
+	key := antigravityCapabilityKeyForRoute(auth, endpoint, s.antigravityModelFetchProxyURL(auth), antigravityModelUserAgentForAuth(auth))
 	return s.cachedAntigravityHintsForKey(auth, endpoint, key)
 }
 
@@ -350,7 +361,7 @@ func (s *Service) fetchAntigravityModelCapabilityHints(ctx context.Context, auth
 		ctx = context.Background()
 	}
 	baseURLs, proxyURL := antigravityModelBaseURLs(auth), s.antigravityModelFetchProxyURL(auth)
-	userAgent := antigravityModelUserAgent()
+	userAgent := antigravityModelUserAgentForAuth(auth)
 	cacheKey := antigravityCapabilityKeyForRoute(auth, baseURLs[0], proxyURL, userAgent)
 	accessToken, _ := auth.Metadata["access_token"].(string)
 	accessToken = strings.TrimSpace(accessToken)
@@ -461,15 +472,11 @@ func (s *Service) probeAntigravityModelCapabilityHints(ctx context.Context, auth
 	if len(baseURLs) == 0 {
 		return antigravityModelCapabilityHints{}, antigravityProbeStatusTransientError
 	}
-	client := &http.Client{}
-	transport, _, errProxy := proxyutil.BuildHTTPTransport(proxyURL)
-	if errProxy != nil {
+	client, closeIdle, errClient := antigravityModelHTTPClient(proxyURL)
+	if errClient != nil {
 		return antigravityModelCapabilityHints{}, antigravityProbeStatusTransientError
 	}
-	if transport != nil {
-		client.Transport = transport
-		defer transport.CloseIdleConnections()
-	}
+	defer closeIdle()
 	project, _ := auth.Metadata["project_id"].(string)
 	body, errMarshal := json.Marshal(map[string]string{"project": project})
 	if errMarshal != nil {
@@ -509,6 +516,35 @@ func (s *Service) probeAntigravityModelCapabilityHints(ctx context.Context, auth
 		return antigravityModelCapabilityHints{}, antigravityProbeStatusTransientError
 	}
 	return hints, antigravityProbeStatusSuccess
+}
+
+// antigravityModelHTTPClient builds the transport used by fetchAvailableModels.
+// The native client sends this control-plane request over HTTP/1.1 without ALPN,
+// even though the generic proxy transport would prefer HTTP/2.
+func antigravityModelHTTPClient(proxyURL string) (*http.Client, func(), error) {
+	transport, _, errProxy := proxyutil.BuildHTTPTransport(proxyURL)
+	if errProxy != nil {
+		return nil, nil, errProxy
+	}
+	if transport == nil {
+		defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok || defaultTransport == nil {
+			// A test or embedder may replace http.DefaultTransport with a custom
+			// RoundTripper. Preserve it rather than constructing a new transport
+			// that would ignore the injected network seam.
+			return &http.Client{Transport: http.DefaultTransport}, func() {}, nil
+		}
+		transport = defaultTransport.Clone()
+	}
+	transport.ForceAttemptHTTP2 = false
+	transport.TLSNextProto = make(map[string]func(authority string, conn *tls.Conn) http.RoundTripper)
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	} else {
+		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	}
+	transport.TLSClientConfig.NextProtos = nil
+	return &http.Client{Transport: transport}, transport.CloseIdleConnections, nil
 }
 
 func (s *Service) antigravityModelFetchProxyURL(auth *coreauth.Auth) string {

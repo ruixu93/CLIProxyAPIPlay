@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +78,77 @@ func TestAntigravityAccountChangesCancelConnectedProbe(t *testing.T) {
 				t.Fatal("completed account probes retained")
 			}
 		})
+	}
+}
+
+func TestAntigravityModelUserAgentPerAuth(t *testing.T) {
+	previous := antigravityModelUserAgent
+	antigravityModelUserAgent = func() string { return "antigravity/hub/2.26.0 (aidev_client; os_type=linux; arch=amd64)" }
+	t.Cleanup(func() { antigravityModelUserAgent = previous })
+
+	macAuth := &coreauth.Auth{Metadata: map[string]any{"ua_platform": "macos"}}
+	if got := antigravityModelUserAgentForAuth(macAuth); !strings.Contains(got, "os_type=darwin; arch=arm64") {
+		t.Fatalf("macOS model UA = %q", got)
+	}
+
+	const explicit = "antigravity/hub/2.24.0 (aidev_client; os_type=darwin; arch=arm64; cl=1000335682)"
+	explicitAuth := &coreauth.Auth{Metadata: map[string]any{"user_agent": explicit, "ua_platform": "linux"}}
+	if got := antigravityModelUserAgentForAuth(explicitAuth); got != explicit {
+		t.Fatalf("explicit model UA = %q, want %q", got, explicit)
+	}
+
+	if got := antigravityModelUserAgentForAuth(&coreauth.Auth{}); got != antigravityModelUserAgent() {
+		t.Fatalf("default model UA = %q, want %q", got, antigravityModelUserAgent())
+	}
+}
+
+func TestAntigravityModelHTTPClientUsesHTTP11WithoutALPN(t *testing.T) {
+	client, closeIdle, err := antigravityModelHTTPClient("")
+	if err != nil {
+		t.Fatalf("antigravityModelHTTPClient() error = %v", err)
+	}
+	defer closeIdle()
+
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		t.Fatalf("transport = %T, want *http.Transport", client.Transport)
+	}
+	if transport.ForceAttemptHTTP2 {
+		t.Fatal("fetchAvailableModels transport must not enable HTTP/2")
+	}
+	if transport.TLSNextProto == nil {
+		t.Fatal("fetchAvailableModels transport must disable implicit h2 upgrade")
+	}
+	if transport.TLSClientConfig == nil || len(transport.TLSClientConfig.NextProtos) != 0 {
+		t.Fatalf("fetchAvailableModels TLS ALPN = %v, want none", transport.TLSClientConfig)
+	}
+}
+
+func TestAntigravityModelProbeUsesHTTP11(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != antigravityModelsPath {
+			t.Errorf("path = %q, want %q", r.URL.Path, antigravityModelsPath)
+		}
+		if r.ProtoMajor != 1 {
+			t.Errorf("proto = %s, want HTTP/1.1", r.Proto)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer access-token" {
+			t.Errorf("Authorization = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":{"gemini-3-pro":{}}}`))
+	}))
+	defer server.Close()
+
+	svc := &Service{}
+	hints, status := svc.probeAntigravityModelCapabilityHints(t.Context(), &coreauth.Auth{
+		Metadata: map[string]any{"project_id": "project-a"},
+	}, []string{server.URL}, "", "access-token", "test-agent")
+	if status != antigravityProbeStatusSuccess {
+		t.Fatalf("probe status = %v, want success", status)
+	}
+	if _, ok := hints.ModelIDs["gemini-3-pro"]; !ok {
+		t.Fatalf("model hints = %v, want gemini-3-pro", hints.ModelIDs)
 	}
 }
 

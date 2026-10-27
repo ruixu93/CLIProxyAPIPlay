@@ -24,6 +24,12 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// antigravityChunkedBody hides the concrete body type from http.NewRequest so Go
+// emits HTTP/1.1 Transfer-Encoding: chunked, matching the native inference framing.
+func antigravityChunkedBody(payload []byte) io.Reader {
+	return io.NopCloser(bytes.NewReader(payload))
+}
+
 func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyauth.Auth, token, modelName string, payload []byte, stream bool, alt, baseURL string, derivedSessionIDs ...string) (*http.Request, error) {
 	if token == "" {
 		return nil, statusErr{code: http.StatusUnauthorized, msg: "missing access token"}
@@ -88,7 +94,7 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 
 		payloadStrBytes := applyAntigravityNativeSignatureReplayIfNeeded(modelName, []byte(payloadStr))
 		payloadStrBytes = helps.FinalizePayload(ctx, payloadStrBytes)
-		bodyReader = bytes.NewReader(payloadStrBytes)
+		bodyReader = antigravityChunkedBody(payloadStrBytes)
 		if e.cfg != nil && e.cfg.RequestLog {
 			payloadLog = append([]byte(nil), payloadStrBytes...)
 		}
@@ -103,7 +109,7 @@ func (e *AntigravityExecutor) buildRequest(ctx context.Context, auth *cliproxyau
 
 		payload = applyAntigravityNativeSignatureReplayIfNeeded(modelName, payload)
 		payload = helps.FinalizePayload(ctx, payload)
-		bodyReader = bytes.NewReader(payload)
+		bodyReader = antigravityChunkedBody(payload)
 		if e.cfg != nil && e.cfg.RequestLog {
 			payloadLog = append([]byte(nil), payload...)
 		}
@@ -614,20 +620,11 @@ func resolveLoadCodeAssistUserAgent(auth *cliproxyauth.Auth) string {
 }
 
 func antigravityConfiguredUserAgent(auth *cliproxyauth.Auth) string {
-	raw := ""
-	if auth != nil {
-		if auth.Attributes != nil {
-			if ua := strings.TrimSpace(auth.Attributes["user_agent"]); ua != "" {
-				raw = ua
-			}
-		}
-		if raw == "" && auth.Metadata != nil {
-			if ua, ok := auth.Metadata["user_agent"].(string); ok && strings.TrimSpace(ua) != "" {
-				raw = strings.TrimSpace(ua)
-			}
-		}
+	raw, platform := cliproxyauth.AntigravityUserAgentOverride(auth)
+	if raw != "" || platform != "" {
+		return misc.AntigravityRequestUserAgentForAccount(raw, platform)
 	}
-	return raw
+	return ""
 }
 
 func resolveCustomAntigravityBaseURL(auth *cliproxyauth.Auth) string {
